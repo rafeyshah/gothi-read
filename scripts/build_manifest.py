@@ -12,6 +12,8 @@ import csv
 import sys
 from pathlib import Path
 import regex as re
+from pathlib import Path
+
 
 GRAPHEME_RE = re.compile(r"\X", re.U)
 
@@ -28,39 +30,44 @@ def read_text(p: Path) -> str:
 
 
 def read_font_labels(p: Path):
-    # Assumes labels are whitespace-separated per character/grapheme.
-    # If your .font format differs, adjust this parser.
-    raw = p.read_text(encoding="utf-8").strip()
-    if not raw:
-        return []
-    # Normalize whitespace to single spaces, then split
-    return re.sub(r"\s+", " ", raw).strip().split(" ")
+    """
+    Return a list of per-char font labels, matching icdar24.py semantics:
+    - .font file is a concatenated sequence like 'aafGs...'
+    - Any whitespace is removed before counting
+    """
+    raw = p.read_text(encoding="utf-8")
+    raw = re.sub(r"\s+", "", raw)  # remove all whitespace, be tolerant
+    return list(raw)  # one label per char
+
+
+def id_key(split_root: Path, p: Path) -> str:
+    # relative path without the extension, using '/' as separator
+    rel = p.relative_to(split_root)
+    return str(rel.with_suffix("")).replace("\\", "/")
 
 
 def discover_triples(split_root: Path):
-    """Return list of (stem, img_path, txt_path, font_path)."""
-    # Index by stem
     images = {}
     texts = {}
     fonts = {}
 
     for p in split_root.rglob("*"):
-        if p.is_file():
-            stem = p.stem
-            ext = p.suffix.lower()
-            if ext in IMG_EXTS:
-                images.setdefault(stem, p)
-            elif ext == ".txt":
-                texts.setdefault(stem, p)
-            elif ext == ".font":
-                fonts.setdefault(stem, p)
+        if not p.is_file():
+            continue
+        ext = p.suffix.lower()
+        key = id_key(split_root, p)
+        if ext in IMG_EXTS:
+            images[key] = p
+        elif ext == ".txt":
+            texts[key] = p
+        elif ext == ".font":
+            fonts[key] = p
 
     triples = []
-    all_stems = set(images) | set(texts) | set(fonts)
-    for s in sorted(all_stems):
-        triples.append((s, images.get(s), texts.get(s), fonts.get(s)))
+    all_keys = set(images) | set(texts) | set(fonts)
+    for k in sorted(all_keys):
+        triples.append((k, images.get(k), texts.get(k), fonts.get(k)))
     return triples
-
 
 def main():
     ap = argparse.ArgumentParser()
