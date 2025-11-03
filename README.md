@@ -1,5 +1,5 @@
 # 🏛️ Gothi-Read
-S
+
 **Track B:** *OCR + Font Group Recognition (Per-Character Multi-Task)*  
 **Author:** Abdul Rafey  
 **Repository:** https://github.com/rafeyshah/gothi-read  
@@ -8,123 +8,149 @@ S
 
 ## 🚀 Overview
 
-This repository implements the foundation of an end-to-end OCR pipeline for **Track B**.
+**Gothi-Read** is an end-to-end OCR + font-group recognition framework developed for **Pattern Recognition Lab**.  
+The goal is to build and benchmark models capable of:
 
-The objective is to evaluate and fine-tune OCR models such as **TrOCR**, **PaddleOCR**, **Donut**, **MMOCR**, and **docTR** to perform both:
-1. Optical Character Recognition (text transcription), and  
-2. Font Group Recognition (per-character classification).
+1. **Optical Character Recognition** — text transcription from scanned lines.  
+2. **Font Group Recognition** — predicting the font category for every character.
 
-So far, the complete **data preparation and verification pipeline** has been developed and validated.  
-This includes environment setup, dataset scanning, manifest building, Unicode-safe character alignment, data visualization, and metric computation.
+The repository now provides:
+- A verified, Unicode-safe data pipeline  
+- Manifest generation and integrity checks  
+- Visualization of font annotations  
+- Evaluation scripts with unified model harness  
+- Metrics computation for CER/WER and font accuracy
 
----
+## ⚙️ Environment Setup
 
-## ⚙️ Implemented Components
+- Configured **Python 3 + PyTorch + Hugging Face + CUDA**.  
+- Verified GPU availability and reproducibility across Colab and VS Code.  
+- Clear modular directory layout: `scripts/`, `src/`, `notebooks/`, `runs/`.  
 
-### 🧩 Environment Setup
-- Configured **Python**, **PyTorch**, **Hugging Face**, and **CUDA** environment.
-- Verified GPU availability and package compatibility in Colab/VSCode.
-- Organized the repository structure with clear directories for scripts, data, notebooks, and experiments.
-
-### 🧾 Dataset Handling and Manifest Creation
-- Implemented `build_manifest.py` to automatically generate CSV manifests listing `.jpg`, `.txt`, and `.font` triplets.
-- Each entry includes Unicode grapheme counts using `regex \X` for accurate multi-byte character handling.
-- Added missing-file and length-mismatch detection logic.
-- Created `check_integrity.py` to summarize data health and integrity statistics.
-- Designed `make_test_split.py` for reproducible train/test splits with configurable ratios and random seeds.
-
-**Example manifest summary output:**
-```
-== train.csv ==
-Total lines         : 163023
-Clean (ok=True)     : 100%
-Missing image/txt/font : 0
-Length mismatches   : 0
-Issues total        : 0
+Main dependencies:
+```bash
+pip install torch torchvision torchaudio transformers jiwer pillow regex matplotlib
 ```
 
-### 🔡 Unicode-Safe Loader and Alignment Checks
-- Developed `icdar24.py` containing two robust dataset classes:
-  - `LineDataset` – simple directory layout.  
-  - `FlexibleLineDataset` – supports FAUBox-style nested structure.
-- Implemented Unicode-safe text splitting (`split_into_chars`) using **grapheme clusters** to handle ligatures and diacritics correctly.
-- Added verification ensuring `len(characters) == len(font_labels)` for all lines.
-- Built integration checks and metric computations (CER/WER) using **JiWER** in `metrics.py`.
+## 🧾 Dataset Handling and Validation
 
-### 🖼 Visualization
-- Implemented `visualize_line.py` to display each image alongside its recognized text and font labels.
-- Each character is colored according to its font group, with a legend mapping label → color.
-- Automatically handles length mismatches by truncating to the shorter sequence.
-- Outputs saved to `exp/viz/` for quick inspection.
+- `build_manifest.py` – scans dataset folders to create manifest CSVs listing `.jpg`, `.txt`, and `.font` triplets.  
+- `check_integrity.py` – summarizes file presence & alignment health.  
+- `make_test_split.py` – builds reproducible test subsets.  
+- Verified 100 % length alignment between text and font sequences.
 
-**Command example:**
-```
+**Validation Integrity Summary**
+Total lines : 4040
+Clean (ok=True) : 3827 (94.73 %)
+Missing txt : 213
+Length mismatches : 0
+✅ 94.7 % of validation lines are clean — ready for evaluation.
+
+## 🔡 Unicode-Safe Data Loader and Alignment
+
+- Implemented in `src/icdar24.py`.  
+- Uses `regex \\X` to split Unicode grapheme clusters — accurate for ligatures and diacritics.  
+- Includes two dataset classes:  
+  - `LineDataset` for flat folder structures.  
+  - `FlexibleLineDataset` for nested FAUBox-style layouts.  
+- Strict assertions ensure `len(characters) == len(font_labels)` for every sample.  
+- Optional filters for Latin-8 font groups and subset selection.
+
+## 🖼 Visualization
+
+`visualize_line.py` renders each line image with colored font labels per character.
+
+**Features**
+- Shows image + text with per-char color coding by font group.  
+- Legend auto-maps font labels → colors.  
+- Trims length mismatches safely.  
+- Saves visualizations to `exp/viz/`.
+
+**Example command**
+```bash
 python scripts/visualize_line.py --manifest manifests/train.csv --num 8
 ```
 
-### 🧮 Metrics
-- Added `metrics.py` for computing **Character Error Rate (CER)** and **Word Error Rate (WER)** using JiWER.
-- Placeholder normalization function for consistent text processing before evaluation.
+## 🧮 Metrics Computation
 
-### 🔤 Vocabulary Preparation
-- Implemented `build_vocab.py` to build character-level vocabularies directly from `.txt` files using the Unicode-safe splitter.
+- `src/metrics.py` computes:
+  - **CER** (Character Error Rate)
+  - **WER** (Word Error Rate)
+- Uses **JiWER** for standard evaluation.  
+- Normalization pipeline prepared for future expansion to font-CER.  
+- Outputs aggregated JSON metrics for consistency across models.
 
-### 🧠 Zero-Shot Baseline (TrOCR)
-- Added `zero_shot_trocr.py` to perform inference using **microsoft/trocr-base-printed** as a baseline OCR model.
-- Outputs predictions and placeholder metrics for further evaluation.
+## 🧠 Unified Model Evaluation Harness
 
----
+`day3_harness.py` provides a single interface to evaluate any OCR model.
+
+**Functions**
+```bash python
+predict_lines(model_name, images) → List[str]  
+evaluate(text_preds, text_gts) → {CER, WER, per_book, per_fontmix}
+```
+**Image Preprocessing**
+grayscale → resize(height = 64) → pad to max width
+
+**Outputs saved to**
+runs/<model>/<date>/
+  preds.txt  
+  metrics.json  
+  per_line.csv  # img_id, gt, pred, CER
+
+``` bash python scripts/day3_harness.py \
+  --manifest manifests/valid.csv \
+  --model microsoft/trocr-base-printed \
+  --height 64 \
+  --limit 1000
+```
 
 ## 📁 Repository Structure
 
-```
 gothi-read/
-├── notebooks/
-│   ├── 01_Environment_&_Repo_Setup.ipynb
-│   ├── 02_Data_loader,_alignment_checks,_and_metrics.ipynb
-│
-├── scripts/
-│   ├── build_manifest.py
-│   ├── check_integrity.py
-│   ├── make_test_split.py
-│   ├── visualize_line.py
-│   ├── build_vocab.py
-│   ├── zero_shot_trocr.py
-│
-├── src/
-│   ├── icdar24.py
-│   ├── metrics.py
-│
-└── exp/
-    └── viz/ (generated visualizations)
-```
+├── notebooks/  
+│   ├── 01_Environment_&_Repo_Setup.ipynb  
+│   ├── 02_Data_loader,_alignment_checks,_and_metrics.ipynb  
+│  
+├── scripts/  
+│   ├── build_manifest.py  
+│   ├── check_integrity.py  
+│   ├── make_test_split.py  
+│   ├── visualize_line.py  
+│   ├── build_vocab.py  
+│   ├── zero_shot_trocr.py  
+│   ├── day3_harness.py  
+│  
+├── src/  
+│   ├── icdar24.py  
+│   ├── metrics.py  
+│  
+└── runs/  
+    └── microsoft_trocr-base-printed/  
+        ├── preds.txt  
+        ├── per_line.csv  
+        └── metrics.json
 
----
+## ✅ Achievements
 
-## ✅ Achievements So Far
-
-- [x] Verified Python, PyTorch, Hugging Face, CUDA environment  
-- [x] Built manifest generator and dataset integrity validator  
-- [x] Implemented Unicode-safe data loading and character alignment  
-- [x] Developed visualizer for per-character font labels  
-- [x] Computed OCR metrics (CER/WER) using JiWER  
-- [x] Built vocabulary extraction and zero-shot TrOCR baseline  
-
----
+- Environment and GPU setup completed  
+- Dataset manifests validated (0 length mismatches)  
+- Unicode-safe data loader implemented  
+- Visualization utility verified  
+- Metric computation (CER/WER) operational  
+- Unified evaluation harness tested successfully  
+- Zero-shot TrOCR baseline benchmarked
 
 ## 🔜 Next Steps
 
-- Integrate **font classification head** into OCR encoder (multi-task fine-tuning).  
-- Evaluate **zero-shot** and **fine-tuned** models on train/validation splits.  
-- Benchmark multiple OCR architectures (TrOCR, PaddleOCR, Donut, MMOCR, docTR).  
-- Compute both **text** and **font-group** CER for comparison.  
-- Begin model fine-tuning experiments (Day 3+).
-
----
+- Add font-classification head to OCR encoder for multi-task learning.  
+- Integrate additional models: PaddleOCR, Donut, MMOCR, docTR.  
+- Benchmark all models on the same validation split.  
+- Compute joint **text CER + font-CER**.  
+- Build a leaderboard under `/runs/` for cross-model comparisons.
 
 ## 🏁 Summary
 
-The repository now has a **fully verified data pipeline** Track B.  
-All dataset integrity, alignment, and visualization issues have been resolved.  
-The project is ready to transition into **model benchmarking and fine-tuning**.
-
+**Gothi-Read** now includes a validated data pipeline, visualization system, and unified model evaluation framework.  
+All data integrity, alignment, and evaluation steps are complete.  
+The project is ready for multi-model benchmarking and fine-tuning experiments for Pattern Recognition Lab.
