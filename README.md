@@ -40,11 +40,11 @@ pip install torch torchvision torchaudio transformers jiwer pillow regex matplot
 - Verified 100 % length alignment between text and font sequences.
 
 **Validation Integrity Summary**
-Total lines : 4040
-Clean (ok=True) : 3827 (94.73 %)
-Missing txt : 213
-Length mismatches : 0
-✅ 94.7 % of validation lines are clean — ready for evaluation.
+- Total lines : 4040
+- Clean (ok=True) : 3827 (94.73 %)
+- Missing txt : 213
+- Length mismatches : 0
+- ✅ 94.7 % of validation lines are clean — ready for evaluation.
 
 ## 🔡 Unicode-Safe Data Loader and Alignment
 
@@ -109,8 +109,6 @@ runs/<model>/<date>/
 
 gothi-read/
 ├── notebooks/  
-│   ├── 01_Environment_&_Repo_Setup.ipynb  
-│   ├── 02_Data_loader,_alignment_checks,_and_metrics.ipynb  
 │  
 ├── scripts/  
 │   ├── build_manifest.py  
@@ -136,7 +134,8 @@ gothi-read/
 - Visualization utility verified  
 - Metric computation (CER/WER) operational  
 - Unified evaluation harness tested successfully  
-- Zero-shot TrOCR baseline benchmarked with beam vs greedy Decoding comparison (Day 4). **Greedy decoding** (num_beams = 1) **gave slightly better average CER/WER overall**, while **beam search** (num_beams = 5) **performed better on difficult or ambiguous lines.**
+- Zero-shot TrOCR baseline benchmarked with beam vs greedy
+- Decoding comparison (Day 4). **Greedy decoding** (num_beams = 1) **gave slightly better average CER/WER overall**, while **beam search** (num_beams = 5) **performed better on difficult or ambiguous lines.**
 
 ## 🔜 Next Steps
 
