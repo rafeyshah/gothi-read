@@ -6,7 +6,10 @@ Usage:
   python scripts/day3_harness.py --manifest manifests/valid.csv --model microsoft/trocr-base-printed --height 64 --limit 500
 """
 
-import os, csv, json, argparse
+import os
+import csv
+import json
+import argparse
 from datetime import datetime
 from pathlib import Path
 from typing import List, Tuple, Dict
@@ -29,8 +32,10 @@ except Exception:
 
 def _edit_distance(a: str, b: str) -> int:
     n, m = len(a), len(b)
-    if n == 0: return m
-    if m == 0: return n
+    if n == 0:
+        return m
+    if m == 0:
+        return n
     prev = list(range(m + 1))
     curr = [0] * (m + 1)
     for i in range(1, n + 1):
@@ -67,13 +72,14 @@ def preprocess_images(paths: List[str], target_height: int) -> List[Image.Image]
     return out
 
 
-def predict_lines(model_name: str, images: List[Image.Image], max_length: int = 256) -> List[str]:
+def predict_lines(model_name: str, images: List[Image.Image], max_length: int = 256, **generate_kwargs) -> List[str]:
     if TrOCRProcessor is None or VisionEncoderDecoderModel is None:
         raise RuntimeError("Transformers not available.")
     processor = TrOCRProcessor.from_pretrained(model_name)
     model = VisionEncoderDecoderModel.from_pretrained(model_name)
     model.eval()
-    device = torch.device("cuda" if torch and torch.cuda.is_available() else "cpu")
+    device = torch.device(
+        "cuda" if torch and torch.cuda.is_available() else "cpu")
     model.to(device)
     preds = []
     batch_size = 8
@@ -81,7 +87,8 @@ def predict_lines(model_name: str, images: List[Image.Image], max_length: int = 
         batch = images[i:i+batch_size]
         inputs = processor(images=batch, return_tensors="pt").to(device)
         with torch.no_grad():
-            out_ids = model.generate(**inputs, max_length=max_length)
+            out_ids = model.generate(
+                **inputs, max_length=max_length, **generate_kwargs)
         texts = processor.batch_decode(out_ids, skip_special_tokens=True)
         preds.extend(texts)
     return preds
@@ -97,10 +104,13 @@ def evaluate(preds: List[str], refs: List[str], ids: List[str]) -> Dict:
         overall_cer = total_edits / total_chars
         overall_wer = None
 
-    per_line = [dict(img_id=i, gt=g, pred=p, CER=cer_per_line(g, p)) for i, g, p in zip(ids, refs, preds)]
+    per_line = [dict(img_id=i, gt=g, pred=p, CER=cer_per_line(g, p))
+                for i, g, p in zip(ids, refs, preds)]
 
-    def infer_fontmix(i): return "single" if "single" in i else "multiple" if "multiple" in i else "unknown"
-    def infer_book(i): parts = i.split("/"); return parts[-2] if len(parts) >= 2 else "unknown"
+    def infer_fontmix(
+        i): return "single" if "single" in i else "multiple" if "multiple" in i else "unknown"
+    def infer_book(i): parts = i.split(
+        "/"); return parts[-2] if len(parts) >= 2 else "unknown"
 
     per_book, per_fontmix = {}, {}
     for row in per_line:
@@ -120,30 +130,57 @@ def load_val_split(csv_path: str, limit=None) -> Tuple[List[str], List[str], Lis
     ids, imgs, gts = [], [], []
     with open(csv_path, newline="", encoding="utf-8") as f:
         for r in csv.DictReader(f):
-            if r.get("ok") != "TRUE": continue
+            if r.get("ok") != "TRUE":
+                continue
             img, txt = r["image_path"], r["txt_path"]
-            if not (img and txt): continue
-            try: gt = Path(txt).read_text(encoding="utf-8").strip()
-            except: continue
-            ids.append(r.get("id", Path(img).stem)); imgs.append(img); gts.append(gt)
-            if limit and len(ids) >= limit: break
+            if not (img and txt):
+                continue
+            try:
+                gt = Path(txt).read_text(encoding="utf-8").strip()
+            except:
+                continue
+            ids.append(r.get("id", Path(img).stem))
+            imgs.append(img)
+            gts.append(gt)
+            if limit and len(ids) >= limit:
+                break
     return ids, imgs, gts
 
 
-def run_harness(manifest: str, model: str, height: int, limit=None, max_length=256):
+def run_harness(manifest: str, model: str, height: int, limit=None, max_length=256, num_beams=1, length_penalty=1.0, no_repeat_ngram_size=0, early_stopping=True):
     ids, imgs, gts = load_val_split(manifest, limit)
     images = preprocess_images(imgs, height)
-    preds = predict_lines(model, images, max_length)
+    generate_kwargs = dict(
+        num_beams=num_beams,
+        length_penalty=length_penalty,
+        no_repeat_ngram_size=no_repeat_ngram_size,
+        early_stopping=early_stopping,
+    )
+
+    preds = predict_lines(model, images, max_length, **generate_kwargs)
     metrics = evaluate(preds, gts, ids)
-    out_dir = Path("runs") / model.replace("/", "_") / datetime.now().strftime("%Y%m%d")
+    metrics["model"] = model
+    metrics["decode"] = {
+        "num_beams": num_beams,
+        "length_penalty": length_penalty,
+        "no_repeat_ngram_size": no_repeat_ngram_size,
+        "early_stopping": bool(early_stopping),
+    }
+    metrics["val_manifest"] = str(Path(args.manifest))  # so every run documents the split
+    out_dir = Path("runs") / model.replace("/", "_") / \
+        datetime.now().strftime("%Y%m%d")
     out_dir.mkdir(parents=True, exist_ok=True)
     with open(out_dir/"preds.txt", "w", encoding="utf-8") as f:
-        for i, p in zip(ids, preds): f.write(f"{i}\t{p}\n")
+        for i, p in zip(ids, preds):
+            f.write(f"{i}\t{p}\n")
     with open(out_dir/"per_line.csv", "w", encoding="utf-8", newline="") as f:
-        w = csv.writer(f); w.writerow(["img_id","gt","pred","CER"])
-        for i,g,p in zip(ids,gts,preds): w.writerow([i,g,p,cer_per_line(g,p)])
+        w = csv.writer(f)
+        w.writerow(["img_id", "gt", "pred", "CER"])
+        for i, g, p in zip(ids, gts, preds):
+            w.writerow([i, g, p, cer_per_line(g, p)])
     with open(out_dir/"metrics.json", "w", encoding="utf-8") as f:
         json.dump(metrics, f, indent=2, ensure_ascii=False)
+
     print("Saved results to", out_dir)
 
 
@@ -154,5 +191,11 @@ if __name__ == "__main__":
     ap.add_argument("--height", type=int, default=64)
     ap.add_argument("--limit", type=int, default=None)
     ap.add_argument("--max_length", type=int, default=256)
+    ap.add_argument("--num_beams", type=int, default=1,
+                    help="Beam size (1 = greedy)")
+    ap.add_argument("--length_penalty", type=float, default=1.0)
+    ap.add_argument("--no_repeat_ngram_size", type=int, default=0)
+    ap.add_argument("--early_stopping", action="store_true")
     args = ap.parse_args()
-    run_harness(args.manifest, args.model, args.height, args.limit, args.max_length)
+    run_harness(args.manifest, args.model, args.height, args.limit, args.max_length,
+                args.num_beams, args.length_penalty, args.no_repeat_ngram_size, bool(args.early_stopping))

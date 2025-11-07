@@ -82,7 +82,7 @@ python scripts/visualize_line.py --manifest manifests/train.csv --num 8
 
 ## 🧠 Unified Model Evaluation Harness
 
-`day3_harness.py` provides a single interface to evaluate any OCR model.
+`harness.py` provides a single interface to evaluate any OCR model.
 
 **Functions**
 ```bash python
@@ -119,7 +119,7 @@ gothi-read/
 │   ├── visualize_line.py  
 │   ├── build_vocab.py  
 │   ├── zero_shot_trocr.py  
-│   ├── day3_harness.py  
+│   ├── harness.py  
 │  
 ├── src/  
 │   ├── icdar24.py  
@@ -127,9 +127,6 @@ gothi-read/
 │  
 └── runs/  
     └── microsoft_trocr-base-printed/  
-        ├── preds.txt  
-        ├── per_line.csv  
-        └── metrics.json
 
 ## ✅ Achievements
 
@@ -139,7 +136,7 @@ gothi-read/
 - Visualization utility verified  
 - Metric computation (CER/WER) operational  
 - Unified evaluation harness tested successfully  
-- Zero-shot TrOCR baseline benchmarked
+- Zero-shot TrOCR baseline benchmarked with beam vs greedy Decoding comparison (Day 4). **Greedy decoding** (num_beams = 1) **gave slightly better average CER/WER overall**, while **beam search** (num_beams = 5) **performed better on difficult or ambiguous lines.**
 
 ## 🔜 Next Steps
 
