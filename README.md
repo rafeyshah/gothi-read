@@ -25,7 +25,7 @@ The repository now provides:
 
 - Configured **Python 3 + PyTorch + Hugging Face + CUDA**.  
 - Verified GPU availability and reproducibility across Colab and VS Code.  
-- Clear modular directory layout: `scripts/`, `src/`, `notebooks/`, `runs/`.  
+- Clear modular directory layout: `scripts/`, `src/`, `notebooks/,` `runs/`.  
 
 Main dependencies:
 ```bash
@@ -49,7 +49,7 @@ pip install torch torchvision torchaudio transformers jiwer pillow regex matplot
 ## 🔡 Unicode-Safe Data Loader and Alignment
 
 - Implemented in `src/icdar24.py`.  
-- Uses `regex \\X` to split Unicode grapheme clusters — accurate for ligatures and diacritics.  
+- Uses `regex \X` to split Unicode grapheme clusters — accurate for ligatures and diacritics.  
 - Includes two dataset classes:  
   - `LineDataset` for flat folder structures.  
   - `FlexibleLineDataset` for nested FAUBox-style layouts.  
@@ -85,28 +85,30 @@ python scripts/visualize_line.py --manifest manifests/train.csv --num 8
 `harness.py` provides a single interface to evaluate any OCR model.
 
 **Functions**
-```bash python
+```python
 predict_lines(model_name, images) → List[str]  
 evaluate(text_preds, text_gts) → {CER, WER, per_book, per_fontmix}
 ```
-**Image Preprocessing**
+
+**Image Preprocessing**  
 grayscale → resize(height = 64) → pad to max width
 
 **Outputs saved to**
+```
 runs/<model>/<date>/
   preds.txt  
   metrics.json  
   per_line.csv  # img_id, gt, pred, CER
+```
 
-``` bash python scripts/day3_harness.py \
-  --manifest manifests/valid.csv \
-  --model microsoft/trocr-base-printed \
-  --height 64 \
-  --limit 1000
+Example:
+```bash
+python scripts/day3_harness.py   --manifest manifests/valid.csv   --model microsoft/trocr-base-printed   --height 64   --limit 1000
 ```
 
 ## 📁 Repository Structure
 
+```text
 gothi-read/
 ├── notebooks/  
 │  
@@ -125,6 +127,7 @@ gothi-read/
 │  
 └── runs/  
     └── microsoft_trocr-base-printed/  
+```
 
 ## ✅ Achievements
 
@@ -134,13 +137,14 @@ gothi-read/
 - Visualization utility verified  
 - Metric computation (CER/WER) operational  
 - Unified evaluation harness tested successfully  
-- Zero-shot TrOCR baseline benchmarked with beam vs greedy
-- Decoding comparison (Day 4). **Greedy decoding** (num_beams = 1) **gave slightly better average CER/WER overall**, while **beam search** (num_beams = 5) **performed better on difficult or ambiguous lines.**
+- Zero-shot TrOCR baseline benchmarked with beam vs greedy  
+- Decoding comparison (Day 4). **Greedy decoding** (num_beams = 1) **gave slightly better average CER/WER overall**, while **beam search** (num_beams = 5) **performed better on difficult or ambiguous lines.**  
+- Zero-shot **PaddleOCR (PP-OCRv4 English)** baseline benchmarked on the same validation split.
 
 ## 🔜 Next Steps
 
 - Add font-classification head to OCR encoder for multi-task learning.  
-- Integrate additional models: PaddleOCR, Donut, MMOCR, docTR.  
+- Extend PaddleOCR experiments and integrate additional models: Donut, MMOCR, docTR.  
 - Benchmark all models on the same validation split.  
 - Compute joint **text CER + font-CER**.  
 - Build a leaderboard under `/runs/` for cross-model comparisons.
@@ -150,3 +154,13 @@ gothi-read/
 **Gothi-Read** now includes a validated data pipeline, visualization system, and unified model evaluation framework.  
 All data integrity, alignment, and evaluation steps are complete.  
 The project is ready for multi-model benchmarking and fine-tuning experiments for Pattern Recognition Lab.
+
+Current zero-shot OCR baselines on the validation split:
+
+| run           | CER       | WER       |
+|---------------|-----------|-----------|
+| **Paddle-OCRv4**     | **0.203298** | **0.755115** |
+| trocr-greedy  | 1.255461  | 1.598408  |
+| trocr-beam    | 1.361015  | 1.732157  |
+
+PaddleOCR (PP-OCRv4, English, detection disabled, line-crop recognizer) currently achieves the best CER/WER among the evaluated models.
