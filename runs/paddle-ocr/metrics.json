@@ -1,0 +1,86 @@
+{
+  "CER": 0.20329753728228286,
+  "WER": 0.7551145977541917,
+  "per_book": {
+    "multiple": {
+      "edits": 2682,
+      "chars": 13375,
+      "lines": 317,
+      "CER": 0.20052336448598132
+    },
+    "antiqua": {
+      "edits": 1884,
+      "chars": 19335,
+      "lines": 653,
+      "CER": 0.09743987587276959
+    },
+    "bastarda": {
+      "edits": 2833,
+      "chars": 12983,
+      "lines": 310,
+      "CER": 0.21820842640375876
+    },
+    "fraktur": {
+      "edits": 6171,
+      "chars": 28234,
+      "lines": 656,
+      "CER": 0.21856626762059927
+    },
+    "gotico-antiqua": {
+      "edits": 1975,
+      "chars": 7359,
+      "lines": 170,
+      "CER": 0.268378855822802
+    },
+    "italic": {
+      "edits": 1938,
+      "chars": 10507,
+      "lines": 289,
+      "CER": 0.1844484629294756
+    },
+    "rotunda": {
+      "edits": 10669,
+      "chars": 46924,
+      "lines": 980,
+      "CER": 0.2273676583411474
+    },
+    "schwabacher": {
+      "edits": 1577,
+      "chars": 8479,
+      "lines": 209,
+      "CER": 0.1859889137870032
+    },
+    "textura": {
+      "edits": 2401,
+      "chars": 10922,
+      "lines": 243,
+      "CER": 0.2198315326863212
+    }
+  },
+  "per_fontmix": {
+    "multiple": {
+      "edits": 2682,
+      "chars": 13375,
+      "lines": 317,
+      "CER": 0.20052336448598132
+    },
+    "single": {
+      "edits": 29448,
+      "chars": 144743,
+      "lines": 3510,
+      "CER": 0.203450253207409
+    }
+  },
+  "model": {
+    "engine": "PaddleOCR",
+    "lang": "en",
+    "ocr_version": "PP-OCRv4",
+    "use_gpu": true,
+    "det": false,
+    "cls": false
+  },
+  "val_manifest": "manifests/valid.csv",
+  "runtime_seconds": 43.119528016000004,
+  "avg_latency_ms_per_line": 11.267187879801412,
+  "num_lines": 3827
+}
