@@ -1,0 +1,81 @@
+{
+  "model": "microsoft/trocr-base-handwritten",
+  "decode": {
+    "num_beams": 1,
+    "length_penalty": 1.0,
+    "no_repeat_ngram_size": 0,
+    "early_stopping": false
+  },
+  "CER": 0.3834857511478769,
+  "WER": 2.3316412859560067,
+  "per_book": {
+    "multiple": {
+      "edits": 4819,
+      "chars": 13375,
+      "lines": 317,
+      "CER": 0.3602990654205607
+    },
+    "antiqua": {
+      "edits": 4557,
+      "chars": 19335,
+      "lines": 653,
+      "CER": 0.2356865787432118
+    },
+    "bastarda": {
+      "edits": 5822,
+      "chars": 12983,
+      "lines": 310,
+      "CER": 0.44843256566278983
+    },
+    "fraktur": {
+      "edits": 10534,
+      "chars": 28234,
+      "lines": 656,
+      "CER": 0.37309626691223347
+    },
+    "gotico-antiqua": {
+      "edits": 2937,
+      "chars": 7359,
+      "lines": 170,
+      "CER": 0.3991031390134529
+    },
+    "italic": {
+      "edits": 3613,
+      "chars": 10507,
+      "lines": 289,
+      "CER": 0.34386599409917196
+    },
+    "rotunda": {
+      "edits": 19141,
+      "chars": 46924,
+      "lines": 980,
+      "CER": 0.40791492626374565
+    },
+    "schwabacher": {
+      "edits": 3841,
+      "chars": 8479,
+      "lines": 209,
+      "CER": 0.4530015331996698
+    },
+    "textura": {
+      "edits": 5372,
+      "chars": 10922,
+      "lines": 243,
+      "CER": 0.49185130928401394
+    }
+  },
+  "per_fontmix": {
+    "multiple": {
+      "edits": 4819,
+      "chars": 13375,
+      "lines": 317,
+      "CER": 0.3602990654205607
+    },
+    "single": {
+      "edits": 55817,
+      "chars": 144743,
+      "lines": 3510,
+      "CER": 0.3856283205405443
+    }
+  }
+}
