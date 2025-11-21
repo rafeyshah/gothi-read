@@ -1,0 +1,10 @@
+{
+  "model": "sbhavy/donut-base-ocr",
+  "manifest": "/content/manifests/valid_clean.csv",
+  "num_lines": 3827,
+  "CER": 0.583134115028017,
+  "WER": 1.0536840486079064,
+  "total_seconds": 382.5716564655304,
+  "avg_seconds_per_line": 0.09996646367011508,
+  "lines_per_second": 10.00335475805122
+}

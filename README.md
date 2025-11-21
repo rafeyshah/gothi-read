@@ -147,6 +147,7 @@ All zero-shot models were re-evaluated on the same **valid_clean.csv** split usi
 | **trocr-handwritten-beam** | 0.356683     | 2.168666     |
 | trocr-handwritten-greedy   | 0.383486     | 2.331641     |
 | trocr-large-printed        | 0.840328     | 5.109445     |
+|donut_sbhavy_donut-base-ocr | 0.596529     | 1.071143     |
 
 ### 🔎 Interpretation
 
