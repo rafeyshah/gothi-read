@@ -1,5 +1,5 @@
-configs
 dataset
+configs
 *.rar
 token.txt
 scripts/font_recognition/old
