@@ -21,6 +21,40 @@ from rec_loader import load_rec_model_with_features, extract_rec_features
 
 
 # -----------------------
+# Utilities: Levenshtein + RLE (for CER)
+# -----------------------
+def levenshtein(a: List[int], b: List[int]) -> int:
+    n, m = len(a), len(b)
+    if n == 0:
+        return m
+    if m == 0:
+        return n
+    if m < n:
+        a, b = b, a
+        n, m = m, n
+    prev = list(range(m + 1))
+    for i in range(1, n + 1):
+        cur = [i] + [0] * m
+        ai = a[i - 1]
+        for j in range(1, m + 1):
+            cost = 0 if ai == b[j - 1] else 1
+            cur[j] = min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + cost)
+        prev = cur
+    return prev[m]
+
+
+def rle(seq: List[int]) -> List[int]:
+    """Collapse consecutive duplicates."""
+    if not seq:
+        return []
+    out = [seq[0]]
+    for x in seq[1:]:
+        if x != out[-1]:
+            out.append(x)
+    return out
+
+
+# -----------------------
 # Small wrapper for stable oversampling
 # -----------------------
 class IndexDataset(paddle.io.Dataset):
@@ -154,6 +188,59 @@ def class_weights_from_token_counts(token_counts: np.ndarray) -> paddle.Tensor:
     w = w / np.mean(w)
     w = np.clip(w, 0.5, 5.0)
     return paddle.to_tensor(w, dtype="float32")
+
+
+# -----------------------
+# Boundary loss (aligns with group CER by punishing extra font flips)
+# -----------------------
+def boundary_loss_from_logits(
+    logits_bgk: paddle.Tensor,
+    y_bg: paddle.Tensor,
+    m_bg: paddle.Tensor,
+    temp: float = 1.0,
+) -> Tuple[paddle.Tensor, paddle.Tensor, paddle.Tensor]:
+    probs = F.softmax(logits_bgk / max(1e-6, float(temp)), axis=-1)
+    sim = paddle.sum(probs[:, :-1, :] * probs[:, 1:, :], axis=-1)  # [B,G-1]
+    p_b = 1.0 - sim  # boundary prob ~ dissimilarity
+
+    b_gt = (y_bg[:, :-1] != y_bg[:, 1:]).astype("float32")
+    mb = (m_bg[:, :-1] * m_bg[:, 1:]).astype("float32")
+
+    eps = 1e-6
+    p_b = paddle.clip(p_b, eps, 1.0 - eps)
+    bce = -(b_gt * paddle.log(p_b) + (1.0 - b_gt) * paddle.log(1.0 - p_b))
+    loss = paddle.sum(bce * mb) / (paddle.sum(mb) + eps)
+
+    pred_trans = paddle.sum(p_b * mb, axis=-1) / (paddle.sum(mb, axis=-1) + eps)
+    gt_trans = paddle.sum(b_gt * mb, axis=-1) / (paddle.sum(mb, axis=-1) + eps)
+    return loss, paddle.mean(pred_trans), paddle.mean(gt_trans)
+
+
+def neighbor_tv_loss(
+    logits_bgk: paddle.Tensor,
+    y_bg: paddle.Tensor,
+    m_bg: paddle.Tensor,
+) -> paddle.Tensor:
+    """
+    Total-variation style loss over probability distributions.
+    Encourages consecutive tokens with the same GT font (and valid masks)
+    to share similar distributions, reducing spurious font flips.
+    """
+    if logits_bgk.shape[1] <= 1:
+        return paddle.to_tensor(0.0, dtype=logits_bgk.dtype)
+
+    prob = F.softmax(logits_bgk, axis=-1)  # [B,G,K]
+    p1 = prob[:, :-1, :]
+    p2 = prob[:, 1:, :]
+
+    same = ((y_bg[:, :-1] == y_bg[:, 1:]).astype("float32")
+            * m_bg[:, :-1] * m_bg[:, 1:])  # [B,G-1]
+    if float(paddle.sum(same)) < 1e-6:
+        return paddle.to_tensor(0.0, dtype=logits_bgk.dtype)
+
+    diff = paddle.abs(p1 - p2).sum(axis=-1)  # [B,G-1]
+    tv = paddle.sum(diff * same) / (paddle.sum(same) + 1e-6)
+    return tv
 
 
 # -----------------------
@@ -350,9 +437,10 @@ def eval_metrics(
     feat_source: str,
     min_range_len: int,
     boundary_weight: float,
+    viterbi_lambda: float = 0.0,
     debug_batches: int = 0,
     num_fonts: int = 0,
-) -> Tuple[float, float, int]:
+) -> Tuple[float, float, float, float, int]:
     head.eval()
     pooler.eval()
 
@@ -367,6 +455,11 @@ def eval_metrics(
     dbg_true = Counter()
     dbg_pred = Counter()
     dbg_taken = 0
+
+    tok_edits = 0
+    tok_len = 0
+    seg_edits = 0
+    seg_len = 0
 
     for x, ranges, y, mask in dl:
         feats = extract_rec_features(rec_model, x)
@@ -385,23 +478,72 @@ def eval_metrics(
 
         pooled = pooler(F_btd, ranges)
         logits = head(pooled)
-        pred = paddle.argmax(logits, axis=-1)
+
+        if viterbi_lambda > 1e-8:
+            # Decode each sample with Potts-model Viterbi to penalize transitions
+            logp = F.log_softmax(logits, axis=-1).numpy()  # [B,G,K]
+            pred_list = []
+            lam = float(viterbi_lambda)
+            for lp, mrow in zip(logp, mask2.numpy()):
+                G, K = lp.shape
+                valid = (mrow > 0.5)
+                T = lp  # [G,K]
+                if not valid.any():
+                    pred_list.append(np.zeros((G,), dtype=np.int64))
+                    continue
+                # DP
+                dp = np.full((G, K), np.inf, dtype=np.float64)
+                back = np.zeros((G, K), dtype=np.int16)
+                dp[0] = -T[0]
+                for g in range(1, G):
+                    if not valid[g]:
+                        dp[g] = dp[g-1]  # copy
+                        back[g] = np.argmin(dp[g-1])
+                        continue
+                    prev = dp[g-1][:, None] + lam * (np.arange(K)[None, :] != np.arange(K)[:, None])
+                    best_prev = prev.min(axis=0)
+                    back[g] = prev.argmin(axis=0)
+                    dp[g] = best_prev - T[g]
+                seq = np.zeros((G,), dtype=np.int64)
+                seq[-1] = dp[-1].argmin()
+                for g in range(G-2, -1, -1):
+                    seq[g] = back[g+1, seq[g+1]]
+                pred_list.append(seq)
+            pred = paddle.to_tensor(np.stack(pred_list, axis=0), place=logits.place)
+        else:
+            pred = paddle.argmax(logits, axis=-1)
 
         m = (mask2 > 0.5).astype("int64")
         eq = (pred == y).astype("int64") * m
+
+        y_np = y.numpy().astype(np.int64)
+        p_np = pred.numpy().astype(np.int64)
+        m_np = (m.numpy() > 0)
 
         total += int(m.sum().item())
         correct += int(eq.sum().item())
 
         if per_c_tot is not None:
-            y_np = (y * m).numpy().reshape([-1]).astype(np.int64)
-            p_np = (pred * m).numpy().reshape([-1]).astype(np.int64)
-            for yy, pp in zip(y_np.tolist(), p_np.tolist()):
-                if yy < 0 or yy >= num_fonts:
+            for yy, pp, mm in zip(y_np.reshape(-1), p_np.reshape(-1), m_np.reshape(-1)):
+                if not mm:
                     continue
                 per_c_tot[yy] += 1
                 if pp == yy:
                     per_c_cor[yy] += 1
+
+        # CER
+        B = y_np.shape[0]
+        for b in range(B):
+            gt_seq = y_np[b][m_np[b]].tolist()
+            pr_seq = p_np[b][m_np[b]].tolist()
+            if not gt_seq:
+                continue
+            tok_edits += levenshtein(pr_seq, gt_seq)
+            tok_len += len(gt_seq)
+            gt_seg = rle(gt_seq)
+            pr_seg = rle(pr_seq)
+            seg_edits += levenshtein(pr_seg, gt_seg)
+            seg_len += len(gt_seg)
 
         if debug_batches and dbg_taken < debug_batches:
             yt = (y * m).numpy().reshape([-1]).tolist()
@@ -425,7 +567,10 @@ def eval_metrics(
                 accs.append(per_c_cor[c] / per_c_tot[c])
         macro = float(np.mean(accs)) if accs else 0.0
 
-    return float(acc), float(macro), total
+    tok_cer = tok_edits / max(1, tok_len)
+    grp_cer = seg_edits / max(1, seg_len)
+
+    return float(acc), float(macro), float(tok_cer), float(grp_cer), total
 
 
 # -----------------------
@@ -449,16 +594,29 @@ def main():
                     choices=["none", "conv", "gru"])
     ap.add_argument("--context-hidden", type=int, default=128)
     ap.add_argument("--context-layers", type=int, default=1)
+    ap.add_argument("--disable-cudnn-rnn", action="store_true",
+                    help="Disable cuDNN RNN kernels (useful if GRU segfaults on some GPUs like Colab T4).")
 
     # NEW: feature source
     ap.add_argument("--feat-source", type=str, default="im2seq", choices=["im2seq", "ctc_neck"],
                     help="Font should train on im2seq (pre-language) for best accuracy.")
 
     # NEW: boundary + range filtering
-    ap.add_argument("--min-range-len", type=int, default=2,
-                    help="Drop tokens whose t_range length < this (reduces boundary/noise).")
-    ap.add_argument("--boundary-weight", type=float, default=0.70,
-                    help="Down-weight tokens at font-change boundaries (0.5~0.8 works well).")
+    ap.add_argument("--min-range-len", type=int, default=1,
+                    help="Drop tokens whose t_range length < this (reduces boundary/noise). "
+                         "Use 1 for most alignments where t-ranges are 1–2 steps.")
+    ap.add_argument("--boundary-weight", type=float, default=0.20,
+                    help="Weight for boundary loss (penalizes spurious transitions).")
+    ap.add_argument("--boundary-downweight", type=float, default=1.0,
+                    help="Optional: down-weight tokens at boundaries (<1.0 reduces boundary tokens).")
+    ap.add_argument("--transition-temp", type=float, default=1.0,
+                    help="Softmax temperature when computing transition probabilities.")
+    ap.add_argument("--print-tran-stats", action="store_true",
+                    help="Print predicted vs GT transition rate during train.")
+    ap.add_argument("--tv-loss-weight", type=float, default=0.0,
+                    help="Neighbor consistency loss weight (TV over probs when GT labels match).")
+    ap.add_argument("--viterbi-lambda", type=float, default=0.0,
+                    help="Inference-time Potts transition penalty; >0 enables Viterbi decoding that penalizes font changes.")
 
     # training
     ap.add_argument("--epochs", type=int, default=8)
@@ -473,7 +631,8 @@ def main():
     ap.add_argument("--focal-gamma", type=float, default=1.1)
     ap.add_argument("--label-smoothing", type=float, default=0.01)
 
-    ap.add_argument("--rec-image-shape", type=str, default="3,32,320")
+    ap.add_argument("--rec-image-shape", type=str, default=None,
+                    help="C,H,W for recognizer preprocess. If omitted, auto-read from rec config (Global.image_shape).")
     ap.add_argument("--max-graphemes", type=int, default=120)
 
     # oversampling
@@ -492,13 +651,30 @@ def main():
 
     # debug
     ap.add_argument("--debug-val-batches", type=int, default=10)
+    ap.add_argument("--eval-every-steps", type=int, default=0,
+                    help="If >0, run eval_metrics every N steps (uses full val_dl, costly).")
+    ap.add_argument("--eval-every-epoch", action="store_true",
+                    help="Run an additional eval_metrics pass at end of each epoch (separate from best-saving eval).")
 
     # checkpoints
     ap.add_argument("--init-head", type=Path, default=None)
     ap.add_argument("--save-best", action="store_true")
+    ap.add_argument("--main-metric", type=str, default="token_cer",
+                    choices=["acc", "token_cer", "group_cer"])
+    ap.add_argument("--resume-from", type=Path, default=None,
+                    help="Resume training from a checkpoint directory (expects train_state.pd + model files).")
+    ap.add_argument("--resume", action="store_true",
+                    help="Auto-resume from <out_dir>/train_state.pd if it exists (ignored when --resume-from is set).")
     ap.add_argument("--out-dir", type=Path, default=Path("runs/font_v3"))
 
     args = ap.parse_args()
+
+    if args.context == "gru" and args.disable_cudnn_rnn:
+        # cuDNN RNN kernels can segfault on some Colab GPUs (e.g., T4).
+        # Use env var only to avoid ValueError in some Paddle builds.
+        import os
+        os.environ["FLAGS_use_cudnn"] = "0"
+        print("[INFO] Set env FLAGS_use_cudnn=0 for GRU; restart the process to guarantee cuDNN is disabled.")
 
     paddle.set_device("cpu" if args.device == "cpu" else "gpu")
 
@@ -507,9 +683,27 @@ def main():
     num_fonts: int = int(vocab["num_fonts"])
 
     print(f"[INFO] num_fonts={num_fonts} pooling={args.pooling} context={args.context} "
-          f"feat_source={args.feat_source} oversample={args.oversample}")
+          f"feat_source={args.feat_source} oversample={args.oversample} main_metric={args.main_metric} "
+          f"boundary_weight={args.boundary_weight} boundary_downweight={args.boundary_downweight}")
 
-    rec_shape = tuple(int(x.strip()) for x in args.rec_image_shape.split(","))
+    # Resolve recognizer image shape
+    if args.rec_image_shape is not None:
+        rec_shape = tuple(int(x.strip()) for x in args.rec_image_shape.split(","))
+    else:
+        try:
+            import yaml  # type: ignore
+            cfg = yaml.safe_load(Path(args.rec_config).read_text(encoding="utf-8"))
+            gimg = cfg.get("Global", {}).get("image_shape")
+            if isinstance(gimg, (list, tuple)) and len(gimg) == 3:
+                rec_shape = tuple(int(x) for x in gimg)
+            else:
+                raise ValueError
+            print(f"[INFO] rec_image_shape auto-set from config: {rec_shape}")
+        except Exception:
+            # fallback to common PP-OCRv5 height
+            rec_shape = (3, 48, 320)
+            print("[WARN] Could not read Global.image_shape from rec config; defaulting to (3,48,320). "
+                  "Pass --rec-image-shape explicitly to override.")
 
     base_train_ds = AlignJsonlFontDataset(
         align_jsonl=args.train_align_jsonl,
@@ -629,18 +823,84 @@ def main():
         init_loss_scaling=1024) if args.amp else None
 
     args.out_dir.mkdir(parents=True, exist_ok=True)
-    best_acc = -1.0
+
+    # Convenience: --resume uses <out_dir>/train_state.pd unless an explicit path was provided
+    if args.resume and args.resume_from is None:
+        cand = args.out_dir / "train_state.pd"
+        if cand.exists():
+            args.resume_from = cand
+            print(f"[INFO] --resume enabled, using checkpoint: {cand}")
+        else:
+            raise FileNotFoundError(
+                f"--resume was set but no train_state.pd found in {args.out_dir}")
+    if args.main_metric == "acc":
+        best_score = -1.0
+    else:
+        best_score = float("inf")
     best_path = args.out_dir / "font_head_best.pdparams"
     best_pool = args.out_dir / "pooler_best.pdparams"
+    state_path = args.out_dir / "train_state.pd"
 
     global_step = 0
+    start_epoch = 1
 
-    for epoch in range(1, args.epochs + 1):
+    # Resume support
+    if args.resume_from is not None:
+        if not args.resume_from.exists():
+            raise FileNotFoundError(f"--resume-from {args.resume_from} does not exist")
+        # expect train_state.pd in resume dir if a directory is given
+        if args.resume_from.is_dir():
+            load_dir = args.resume_from
+            state_ckpt = load_dir / "train_state.pd"
+        else:
+            load_dir = args.resume_from.parent
+            state_ckpt = args.resume_from
+
+        # If user didn't override out_dir (still default) but is resuming from a different folder,
+        # keep outputs inside the checkpoint directory to avoid scattering checkpoints.
+        if args.out_dir == Path("runs/font_v3") and args.out_dir.resolve() != load_dir.resolve():
+            print(f"[INFO] Switching out_dir to resume directory: {load_dir}")
+            args.out_dir = load_dir
+            state_path = args.out_dir / "train_state.pd"
+            best_path = args.out_dir / "font_head_best.pdparams"
+            best_pool = args.out_dir / "pooler_best.pdparams"
+
+        if not state_ckpt.exists():
+            raise FileNotFoundError(f"Cannot find state checkpoint at {state_ckpt}")
+
+        st = paddle.load(str(state_ckpt))
+        head_state = paddle.load(str(load_dir / "font_head_last.pdparams"))
+        pool_state = paddle.load(str(load_dir / "pooler_last.pdparams"))
+        head.set_state_dict(head_state)
+        pooler.set_state_dict(pool_state)
+
+        opt.set_state_dict(st["opt"])
+        lr_sched.set_state_dict(st["lr_sched"])
+        if scaler is not None and st.get("scaler") is not None:
+            try:
+                scaler.load_state_dict(st["scaler"])
+            except Exception as e1:
+                try:
+                    scaler.set_state_dict(st["scaler"])
+                except Exception as e2:
+                    print(f"[WARN] GradScaler restore skipped (load/set failed): {e1} / {e2}")
+
+        global_step = int(st.get("global_step", 0))
+        best_score = float(st.get("best_score", best_score))
+        start_epoch = int(st.get("epoch", 1)) + 1
+        print(f"[OK] resumed from {state_ckpt}, start_epoch={start_epoch}, global_step={global_step}, best_score={best_score}")
+
+    for epoch in range(start_epoch, args.epochs + 1):
         head.train()
         pooler.train()
 
         running_loss = 0.0
         running_tokens = 0
+        epoch_kept_tokens = 0
+        boundary_losses = []
+        tv_losses = []
+        pred_tr_list = []
+        gt_tr_list = []
 
         for x, ranges, y, mask in train_dl:
             global_step += 1
@@ -660,16 +920,17 @@ def main():
                 rlen = (ranges[:, :, 1] - ranges[:, :, 0] + 1).astype("int64")  # [B,G]
                 mask2 = mask * (rlen >= args.min_range_len).astype("float32")
 
-                # Boundary down-weighting (weights only, no gradients needed here)
+                # Optional boundary down-weighting (sample weights only)
                 yw = y.astype("int64")
                 B, G = yw.shape
                 w = paddle.ones([B, G], dtype="float32")
-                if G >= 2 and args.boundary_weight < 1.0:
+                if G >= 2 and args.boundary_downweight < 0.999:
                     left_diff = (yw[:, 1:] != yw[:, :-1]).astype("float32")  # [B,G-1]
                     boundary = paddle.zeros([B, G], dtype="float32")
                     boundary[:, 1:] = paddle.maximum(boundary[:, 1:], left_diff)
                     boundary[:, :-1] = paddle.maximum(boundary[:, :-1], left_diff)
-                    w = w * (1.0 - boundary) + w * boundary * float(args.boundary_weight)
+                    dw = float(args.boundary_downweight)
+                    w = w * (1.0 - boundary) + w * boundary * dw
 
             # 2) IMPORTANT: pooler/head must run WITH grads (NO no_grad here)
             pooled = pooler(F_btd, ranges)   # [B,G,pool_dim]
@@ -681,6 +942,7 @@ def main():
             m2 = mask2.reshape([B * G])
             w2 = w.reshape([B * G])
 
+            # how many tokens survive masking for train stability diagnostics
             idx = paddle.nonzero(m2 > 0.5).reshape([-1])
             if idx.shape[0] == 0:
                 lr_sched.step()
@@ -699,6 +961,14 @@ def main():
                         label_smoothing=args.label_smoothing,
                         sample_weight=sw_v,
                     )
+                    bnd_loss, pred_tr, gt_tr = boundary_loss_from_logits(
+                        logits, y, mask2, temp=args.transition_temp)
+                    loss = loss + float(args.boundary_weight) * bnd_loss
+                    if args.tv_loss_weight > 1e-8:
+                        tv_loss = neighbor_tv_loss(logits, y, mask2)
+                        loss = loss + float(args.tv_loss_weight) * tv_loss
+                    else:
+                        tv_loss = paddle.to_tensor(0.0)
                 scaler.scale(loss).backward()
                 scaler.step(opt)
                 scaler.update()
@@ -711,6 +981,15 @@ def main():
                     label_smoothing=args.label_smoothing,
                     sample_weight=sw_v,
                 )
+                bnd_loss, pred_tr, gt_tr = boundary_loss_from_logits(
+                    logits, y, mask2, temp=args.transition_temp)
+                loss = loss + float(args.boundary_weight) * bnd_loss
+                if args.tv_loss_weight > 1e-8:
+                    tv_loss = neighbor_tv_loss(logits, y, mask2)
+                    loss = loss + float(args.tv_loss_weight) * tv_loss
+                else:
+                    tv_loss = paddle.to_tensor(0.0)
+
                 loss.backward()
                 opt.step()
                 opt.clear_grad()
@@ -720,20 +999,62 @@ def main():
             n_tok = int(idx.shape[0])
             running_loss += float(loss.item()) * n_tok
             running_tokens += n_tok
+            epoch_kept_tokens += n_tok
+            boundary_losses.append(float(bnd_loss.item()))
+            tv_losses.append(float(tv_loss.item()))
+            pred_tr_list.append(float(pred_tr.item()))
+            gt_tr_list.append(float(gt_tr.item()))
 
             if global_step % 50 == 0:
                 avg = running_loss / max(1, running_tokens)
                 print(
                     f"[train] epoch={epoch} step={global_step} avg_loss={avg:.4f} tokens={running_tokens}")
 
+            # Optional on-the-fly evaluation
+            if args.eval_every_steps > 0 and val_dl is not None and global_step % args.eval_every_steps == 0:
+                head.eval()
+                pooler.eval()
+                acc, macro, tok_cer, grp_cer, ntok = eval_metrics(
+                    rec_model=rec_model,
+                    pooler=pooler,
+                    head=head,
+                    dl=val_dl,
+                    feat_source=args.feat_source,
+                    min_range_len=args.min_range_len,
+                    boundary_weight=args.boundary_weight,
+                    viterbi_lambda=args.viterbi_lambda,
+                    debug_batches=args.debug_val_batches,
+                    num_fonts=num_fonts,
+                )
+                print(
+                    f"[eval@step] epoch={epoch} step={global_step} tokens={ntok} "
+                    f"acc={acc:.4f} macro_acc={macro:.4f} token_CER={tok_cer:.4f} group_CER={grp_cer:.4f}"
+                )
+                head.train()
+                pooler.train()
+
+        msg = f"[train] epoch={epoch} avg_loss={running_loss / max(1, running_tokens):.6f}"
+        if boundary_losses:
+            msg += f" boundary_loss={float(np.mean(boundary_losses)):.6f}"
+        if tv_losses:
+            msg += f" tv_loss={float(np.mean(tv_losses)):.6f}"
+        if args.print_tran_stats and pred_tr_list:
+            msg += f" pred_tr={float(np.mean(pred_tr_list)):.4f} gt_tr={float(np.mean(gt_tr_list)):.4f}"
+        msg += f" kept_tokens={epoch_kept_tokens}"
+        print(msg)
+
         print(f"[OK] saved epoch={epoch} checkpoints")
         paddle.save(head.state_dict(), str(
             args.out_dir / f"font_head_epoch{epoch}.pdparams"))
         paddle.save(pooler.state_dict(), str(
             args.out_dir / f"pooler_epoch{epoch}.pdparams"))
+        paddle.save(head.state_dict(), str(
+            args.out_dir / "font_head_last.pdparams"))
+        paddle.save(pooler.state_dict(), str(
+            args.out_dir / "pooler_last.pdparams"))
 
         if val_dl is not None:
-            acc, macro, ntok = eval_metrics(
+            acc, macro, tok_cer, grp_cer, ntok = eval_metrics(
                 rec_model=rec_model,
                 pooler=pooler,
                 head=head,
@@ -741,17 +1062,60 @@ def main():
                 feat_source=args.feat_source,
                 min_range_len=args.min_range_len,
                 boundary_weight=args.boundary_weight,
+                viterbi_lambda=args.viterbi_lambda,
                 debug_batches=args.debug_val_batches,
                 num_fonts=num_fonts,
             )
             print(
-                f"[val] epoch={epoch} acc={acc:.4f} macro_acc={macro:.4f} tokens={ntok}")
+                f"[val] epoch={epoch} acc={acc:.4f} macro_acc={macro:.4f} "
+                f"token_font_CER={tok_cer:.4f} group_font_CER={grp_cer:.4f} tokens={ntok}")
 
-            if acc > best_acc:
-                best_acc = acc
+            if args.main_metric == "acc":
+                cand = acc
+                better = cand > best_score
+            elif args.main_metric == "token_cer":
+                cand = tok_cer
+                better = cand < best_score
+            else:
+                cand = grp_cer
+                better = cand < best_score
+
+            if args.save_best and better:
+                best_score = cand
                 paddle.save(head.state_dict(), str(best_path))
                 paddle.save(pooler.state_dict(), str(best_pool))
-                print(f"[OK] saved BEST acc={best_acc:.4f}")
+                print(f"[OK] saved BEST {args.main_metric}={best_score:.4f}")
+
+        # Optional additional eval after each epoch (same metrics; for monitoring even when save_best is off)
+        if args.eval_every_epoch and val_dl is not None:
+            acc, macro, tok_cer, grp_cer, ntok = eval_metrics(
+                rec_model=rec_model,
+                pooler=pooler,
+                head=head,
+                dl=val_dl,
+                feat_source=args.feat_source,
+                min_range_len=args.min_range_len,
+                boundary_weight=args.boundary_weight,
+                viterbi_lambda=args.viterbi_lambda,
+                debug_batches=args.debug_val_batches,
+                num_fonts=num_fonts,
+            )
+            print(
+                f"[val_epoch] epoch={epoch} acc={acc:.4f} macro_acc={macro:.4f} "
+                f"token_font_CER={tok_cer:.4f} group_font_CER={grp_cer:.4f} tokens={ntok}")
+
+        # Save training state for resume
+        paddle.save(
+            {
+                "epoch": epoch,
+                "global_step": global_step,
+                "best_score": best_score,
+                "opt": opt.state_dict(),
+                "lr_sched": lr_sched.state_dict(),
+                "scaler": scaler.state_dict() if scaler is not None else None,
+            },
+            str(state_path),
+        )
 
 
 if __name__ == "__main__":

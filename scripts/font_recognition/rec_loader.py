@@ -121,7 +121,22 @@ def _load_weights(model: paddle.nn.Layer, cfg: Dict[str, Any], checkpoint_path: 
     if not isinstance(state, dict):
         raise RuntimeError(
             f"Unsupported checkpoint format at {checkpoint_path}")
-    model.set_state_dict(state)
+
+    # Shape-safe loading: keep only parameters whose shapes match.
+    cur = model.state_dict()
+    filtered = {}
+    skipped = []
+    for k, v in state.items():
+        if k in cur and list(cur[k].shape) == list(v.shape):
+            filtered[k] = v
+        else:
+            skipped.append(k)
+
+    cur.update(filtered)
+    model.set_state_dict(cur)
+
+    if skipped:
+        print(f"[WARN] Skipped loading {len(skipped)} params due to shape mismatch: {skipped[:6]}{'...' if len(skipped)>6 else ''}")
 
 
 def _pick_main_tensor(x):
@@ -207,6 +222,32 @@ def load_rec_model_with_features(
 
     cfg = _load_yaml(config_path)
     _inject_out_channels_list(cfg, config_path)
+
+    # Guardrail: ensure dictionary size matches checkpoint embedding rows.
+    try:
+        dict_path = _resolve_dict_path(cfg, config_path)
+        tokens = _read_dict_tokens(dict_path)
+        use_space_char = bool(cfg.get("Global", {}).get("use_space_char", False))
+        dict_tokens = len(tokens) + (1 if use_space_char and " " not in tokens else 0)
+
+        state = paddle.load(checkpoint_path)
+        if isinstance(state, dict) and "state_dict" in state and isinstance(state["state_dict"], dict):
+            state = state["state_dict"]
+        emb_key = "head.gtc_head.embedding.embedding.weight"
+        if isinstance(state, dict) and emb_key in state:
+            ckpt_tokens = state[emb_key].shape[0]
+            # NRTR-style decoders append BOS/EOS; allow either exact match or +2.
+            expected = {dict_tokens, dict_tokens + 2}
+            if ckpt_tokens not in expected:
+                print(
+                    f"[WARN] Dict/token mismatch: checkpoint expects {ckpt_tokens} tokens but dict has {dict_tokens} "
+                    f"(or {dict_tokens + 2} incl. BOS/EOS). Dropping GTC/CTC head weights; they will be re-initialized."
+                )
+                for k in list(state.keys()):
+                    if k.startswith("head.gtc_head.") or k.startswith("head.ctc_head."):
+                        state.pop(k, None)
+    except Exception as e:
+        raise
 
     from ppocr.modeling.architectures.base_model import BaseModel  # type: ignore
 

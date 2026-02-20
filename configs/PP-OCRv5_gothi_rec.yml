@@ -2,11 +2,11 @@ Global:
   model_name: PP-OCRv5_server_rec # To use static model for inference.
   debug: false
   use_gpu: true
-  epoch_num: 5
+  epoch_num: 40
   export_with_pir: False
   log_smooth_window: 20
   print_batch_step: 10
-  save_model_dir: ./output/PP-OCRv5_server_rec
+  save_model_dir: /content/drive/MyDrive/GothiRead/output/PPOCRv5
   save_epoch_step: 1
   eval_batch_step: [0, 2000]
   cal_metric_during_train: true
@@ -16,12 +16,12 @@ Global:
   save_inference_dir:
   use_visualdl: false
   infer_img: doc/imgs_words/ch/word_1.jpg
-  character_dict_path: ./ppocr/utils/gothi_dict.txt
+  character_dict_path: /content/PaddleOCR/gothi_dict.txt
   max_text_length: &max_text_length 50
   infer_mode: false
   use_space_char: false
   distributed: true
-  save_res_path: ./output/rec/predicts_ppocrv5.txt
+  save_res_path: /content/drive/MyDrive/GothiRead/output/PPOCRv5/predicts_ppocrv5.txt
   d2s_train_image_shape: [3, 48, 320]
 
 
@@ -79,10 +79,10 @@ Train:
   dataset:
     name: MultiScaleDataSet
     ds_width: false
-    data_dir: ./train_data/
+    data_dir: /content/dataset/train
     ext_op_transform_idx: 1
     label_file_list:
-    - ./rec_gt_train.txt
+    - /content/PaddleOCR/rec_gt_train.txt
     transforms:
     - DecodeImage:
         img_mode: BGR
@@ -112,9 +112,9 @@ Train:
 Eval:
   dataset:
     name: SimpleDataSet
-    data_dir: ./train_data
+    data_dir: /content/dataset/valid
     label_file_list:
-    - ./rec_gt_val.txt
+    - /content/PaddleOCR/rec_gt_val.txt
     transforms:
     - DecodeImage:
         img_mode: BGR

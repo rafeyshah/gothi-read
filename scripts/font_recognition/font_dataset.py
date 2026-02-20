@@ -38,7 +38,13 @@ class AlignJsonlFontDataset(paddle.io.Dataset):
         self.items: List[Dict[str, Any]] = []
         with self.align_jsonl.open("r", encoding="utf-8") as f:
             for line in f:
-                ex = json.loads(line)
+                if not line.strip():
+                    continue
+                try:
+                    ex = json.loads(line)
+                except Exception:
+                    # Skip malformed lines instead of crashing
+                    continue
                 if not ex.get("ok_align"):
                     continue
                 img = ex.get("image_path")
