@@ -4,8 +4,6 @@
 **Author:** Abdul Rafey  
 **Repository:** https://github.com/rafeyshah/gothi-read
 
----
-
 ## Overview
 
 **Gothi-Read** is an end-to-end OCR + font-group recognition framework developed for **Pattern Recognition Lab**.
@@ -21,6 +19,32 @@ The repository now provides:
 - Visualization of font annotations
 - Evaluation scripts with a unified model harness
 - Metrics computation for CER/WER and font accuracy
+
+---
+
+## Latest Results
+
+### OCR (fine-tuned PaddleOCR, `valid_clean`)
+
+- **CER:** 0.0128
+- **WER:** 0.0796
+- Strongest per-font-group OCR CER: `schwabacher` (0.0058)
+- Hardest per-font-group OCR CER: `textura` (0.0154)
+- Mixed-font lines CER: 0.0233
+
+### Per-Character Font Group Recognition (Track B)
+
+- **Ensemble Font CER:** 0.0214 (2.14%) on 17,923 scored lines
+- Ensemble selection: `CRNN` 17,167 lines, `Transformer` 756 lines
+- CRNN-only Font CER: 0.02348
+- Transformer-only Font CER: 0.19173
+
+### Submission Export Status
+
+- End-to-end Track B export pipeline is implemented:
+  - OCR text predictions + font-sequence predictions are merged
+  - length alignment and label validation are enforced
+  - submission artifacts are generated in `runs/trackb-submission/`
 
 ---
 
