@@ -24,7 +24,7 @@ The repository now provides:
 
 ## Latest Results
 
-### OCR (fine-tuned PaddleOCR, `valid_clean`)
+### OCR (fine-tuned PaddleOCR, `test_clean`)
 
 - **CER:** 0.0128
 - **WER:** 0.0796
@@ -32,12 +32,45 @@ The repository now provides:
 - Hardest per-font-group OCR CER: `textura` (0.0154)
 - Mixed-font lines CER: 0.0233
 
+Detailed per-font-group OCR CER:
+
+| Group | CER |
+|---|---:|
+| antiqua | 0.0083 |
+| bastarda | 0.0141 |
+| fraktur | 0.0085 |
+| gotico-antiqua | 0.0128 |
+| italic | 0.0133 |
+| rotunda | 0.0145 |
+| schwabacher | 0.0058 |
+| textura | 0.0154 |
+| multiple-font lines | 0.0233 |
+
 ### Per-Character Font Group Recognition (Track B)
 
 - **Ensemble Font CER:** 0.0214 (2.14%) on 17,923 scored lines
 - Ensemble selection: `CRNN` 17,167 lines, `Transformer` 756 lines
 - CRNN-only Font CER: 0.02348
 - Transformer-only Font CER: 0.19173
+
+Detailed per-dominant-font Font CER:
+
+| Dominant Font | CRNN CER | Transformer CER |
+|---|---:|---:|
+| G | 0.02297 | 0.16947 |
+| a | 0.01826 | 0.22142 |
+| b | 0.04279 | 0.17067 |
+| f | 0.01711 | 0.20554 |
+| i | 0.02024 | 0.20364 |
+| r | 0.04014 | 0.18080 |
+| s | 0.02602 | 0.16897 |
+| t | 0.01304 | 0.21863 |
+
+Observations:
+
+- CRNN outperforms Transformer across all dominant font groups in this setup.
+- Harder dominant groups for CRNN are `b` and `r`.
+- Strongest dominant group for CRNN is `t`.
 
 ### Submission Export Status
 
