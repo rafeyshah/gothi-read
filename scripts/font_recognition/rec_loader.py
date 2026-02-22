@@ -3,215 +3,218 @@
 
 from __future__ import annotations
 
-import os
-import sys
+import csv
+import json
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Set
+from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
-# -----------------------------
-# Make PaddleOCR importable
-# -----------------------------
-PADDLEOCR_ROOT = Path(os.environ.get(
-    "PADDLEOCR_ROOT", "/content/PaddleOCR")).resolve()
-if not (PADDLEOCR_ROOT / "ppocr").exists():
-    raise RuntimeError(
-        f"Cannot find ppocr/ under PADDLEOCR_ROOT={PADDLEOCR_ROOT}")
-sys.path.insert(0, str(PADDLEOCR_ROOT))
-
-import paddle  # noqa: E402
+import torch
+from PIL import Image
+from torch.utils.data import Dataset
+from torchvision.transforms.functional import pil_to_tensor
 
 
-def _load_yaml(config_path: str) -> Dict[str, Any]:
-    import yaml
-    with open(config_path, "r", encoding="utf-8") as f:
-        cfg = yaml.safe_load(f)
-    if not isinstance(cfg, dict):
-        raise RuntimeError(f"Config did not parse as dict: {config_path}")
-    return cfg
+DEFAULT_FONT_LABELS = ["a", "G", "f", "b", "t", "s", "r", "i"]
 
 
-def _read_dict_tokens(dict_path: Path) -> List[str]:
-    tokens: List[str] = []
-    with dict_path.open("r", encoding="utf-8") as f:
-        for line in f:
-            tok = line.rstrip("\n\r")
-            if tok == "":
+def load_font_vocab(vocab_path: Optional[str]) -> Tuple[List[str], Dict[str, int]]:
+    if vocab_path is None:
+        labels = list(DEFAULT_FONT_LABELS)
+    else:
+        data = json.loads(Path(vocab_path).read_text(encoding="utf-8"))
+        labels = data.get("labels", DEFAULT_FONT_LABELS)
+    stoi = {lab: i for i, lab in enumerate(labels)}
+    return labels, stoi
+
+
+def parse_font_tokens(raw: object) -> List[str]:
+    if isinstance(raw, list):
+        return [str(x) for x in raw]
+    if isinstance(raw, str):
+        s = raw.strip()
+        if not s:
+            return []
+        if " " in s:
+            return [tok for tok in s.split() if tok]
+        return list(s)
+    return []
+
+
+def _candidate_from_content_prefix(path_str: str, data_root: Optional[Path]) -> Optional[Path]:
+    if data_root is None:
+        return None
+    norm = path_str.replace("\\", "/")
+    marker = "/dataset/"
+    if marker not in norm:
+        return None
+    rel = norm.split(marker, 1)[1]
+    return data_root / Path(rel)
+
+
+def resolve_dataset_path(
+    given_path: str,
+    sample_id: str,
+    suffix: str,
+    data_root: Optional[str] = None,
+    split_hint: Optional[str] = None,
+) -> Path:
+    raw = Path(given_path)
+    if raw.exists():
+        return raw
+
+    root = Path(data_root) if data_root else None
+
+    cands: List[Path] = []
+    from_content = _candidate_from_content_prefix(given_path, root)
+    if from_content is not None:
+        cands.append(from_content)
+    if root is not None and sample_id:
+        split = split_hint or ("valid" if "/valid/" in given_path.replace("\\", "/") else None)
+        if split:
+            cands.append(root / split / f"{sample_id}{suffix}")
+        cands.append(root / f"{sample_id}{suffix}")
+
+    for c in cands:
+        if c.exists():
+            return c
+
+    return cands[0] if cands else raw
+
+
+@dataclass
+class AlignItem:
+    sample_id: str
+    image_path: Path
+    font_path: Path
+    gt_fonts: List[str]
+
+
+def load_align_items_from_csv(
+    csv_path: str,
+    font_stoi: Dict[str, int],
+    data_root: Optional[str] = None,
+    split_hint: Optional[str] = None,
+    only_ok: bool = True,
+    limit: Optional[int] = None,
+) -> List[AlignItem]:
+    items: List[AlignItem] = []
+    p = Path(csv_path)
+    with p.open("r", encoding="utf-8", newline="") as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            ok_val = str(row.get("ok", "")).strip().upper()
+            if only_ok and ok_val not in {"TRUE", "1", "YES", "Y"}:
                 continue
-            tokens.append(tok)
-    return tokens
+
+            sample_id = str(row.get("id", ""))
+            image_path = str(row.get("image_path", "")).strip()
+            font_path = str(row.get("font_path", "")).strip()
+            if not image_path or not sample_id or not font_path:
+                continue
+
+            resolved_img = resolve_dataset_path(image_path, sample_id, ".jpg", data_root, split_hint)
+            resolved_font = resolve_dataset_path(font_path, sample_id, ".font", data_root, split_hint)
+            if (not resolved_img.exists()) or (not resolved_font.exists()):
+                continue
+
+            font_raw = resolved_font.read_text(encoding="utf-8")
+            gt_fonts = parse_font_tokens(font_raw)
+            if not gt_fonts:
+                continue
+            if any(tok not in font_stoi for tok in gt_fonts):
+                continue
+
+            items.append(
+                AlignItem(
+                    sample_id=sample_id,
+                    image_path=resolved_img,
+                    font_path=resolved_font,
+                    gt_fonts=gt_fonts,
+                )
+            )
+            if limit is not None and len(items) >= limit:
+                break
+    return items
 
 
-def _resolve_dict_path(cfg: Dict[str, Any], config_path: str) -> Path:
-    g = cfg.get("Global", {}) or {}
-    p = g.get("character_dict_path", None)
-    if not p:
-        raise RuntimeError("Global.character_dict_path is missing in config")
-
-    p = str(p)
-    base = Path(config_path).resolve().parent
-    dict_path = (
-        base / p).resolve() if p.startswith(".") or not Path(p).is_absolute() else Path(p)
-
-    if not dict_path.exists():
-        alt = (PADDLEOCR_ROOT / p.lstrip("./")).resolve()
-        if alt.exists():
-            dict_path = alt
-
-    if not dict_path.exists():
-        raise FileNotFoundError(f"character_dict_path not found: {dict_path}")
-
-    return dict_path
+def _resize_to_height(im: Image.Image, target_h: int, max_w: int) -> Image.Image:
+    w, h = im.size
+    if h <= 0:
+        h = 1
+    new_w = max(1, int(round(w * (target_h / float(h)))))
+    new_w = min(new_w, max_w)
+    return im.resize((new_w, target_h), Image.BICUBIC)
 
 
-def _infer_decoders_used(cfg: Dict[str, Any]) -> Set[str]:
-    arch = cfg.get("Architecture", {}) or {}
-    head = arch.get("Head", {}) or {}
-    head_list = head.get("head_list", []) or []
+class FontAlignDataset(Dataset):
+    def __init__(
+        self,
+        items: Sequence[AlignItem],
+        font_stoi: Dict[str, int],
+        image_height: int = 48,
+        max_width: int = 1536,
+    ):
+        self.items = list(items)
+        self.font_stoi = font_stoi
+        self.image_height = image_height
+        self.max_width = max_width
 
-    need: Set[str] = set()
-    for item in head_list:
-        if not isinstance(item, dict) or not item:
-            continue
-        name = list(item.keys())[0]
-        if name == "CTCHead":
-            need.add("CTCLabelDecode")
-        elif name == "NRTRHead":
-            need.add("NRTRLabelDecode")
-        elif name == "SARHead":
-            need.add("SARLabelDecode")
+    def __len__(self) -> int:
+        return len(self.items)
 
-    pp = cfg.get("PostProcess", {}) or {}
-    if pp.get("name") == "CTCLabelDecode":
-        need.add("CTCLabelDecode")
-    return need
-
-
-def _inject_out_channels_list(cfg: Dict[str, Any], config_path: str) -> None:
-    g = cfg.get("Global", {}) or {}
-    use_space_char = bool(g.get("use_space_char", False))
-
-    dict_path = _resolve_dict_path(cfg, config_path)
-    tokens = _read_dict_tokens(dict_path)
-
-    if use_space_char and " " not in tokens:
-        tokens.append(" ")
-
-    # CTC classes = len(tokens) + 1 (blank)
-    num_classes = len(tokens) + 1
-
-    needed = _infer_decoders_used(cfg)
-    out_channels_list = {k: num_classes for k in needed}
-
-    cfg.setdefault("Architecture", {})
-    cfg["Architecture"].setdefault("Head", {})
-    cfg["Architecture"]["Head"]["out_channels_list"] = out_channels_list
+    def __getitem__(self, idx: int):
+        it = self.items[idx]
+        im = Image.open(it.image_path).convert("L")
+        im = _resize_to_height(im, self.image_height, self.max_width)
+        t = pil_to_tensor(im).float() / 255.0  # [1, H, W]
+        target = torch.tensor([self.font_stoi[x] + 1 for x in it.gt_fonts], dtype=torch.long)
+        return {
+            "image": t,
+            "target_ids": target,
+            "target_tokens": it.gt_fonts,
+            "sample_id": it.sample_id,
+            "image_path": str(it.image_path),
+            "width": t.shape[-1],
+        }
 
 
-def _load_weights(model: paddle.nn.Layer, cfg: Dict[str, Any], checkpoint_path: str) -> None:
-    try:
-        from ppocr.utils.save_load import load_model  # type: ignore
-        load_model(cfg, model, checkpoint_path)
-        return
-    except Exception:
-        pass
+def collate_font_batch(batch: Sequence[dict]) -> dict:
+    max_w = max(x["image"].shape[-1] for x in batch)
+    bsz = len(batch)
+    h = batch[0]["image"].shape[-2]
+    images = torch.ones((bsz, 1, h, max_w), dtype=torch.float32)
+    widths = torch.zeros((bsz,), dtype=torch.long)
+    targets: List[torch.Tensor] = []
+    target_lengths = torch.zeros((bsz,), dtype=torch.long)
+    ids: List[str] = []
+    img_paths: List[str] = []
+    token_refs: List[List[str]] = []
 
-    state = paddle.load(checkpoint_path)
-    if isinstance(state, dict) and "state_dict" in state and isinstance(state["state_dict"], dict):
-        state = state["state_dict"]
-    if not isinstance(state, dict):
-        raise RuntimeError(
-            f"Unsupported checkpoint format at {checkpoint_path}")
-    model.set_state_dict(state)
+    for i, row in enumerate(batch):
+        w = row["image"].shape[-1]
+        images[i, :, :, :w] = row["image"]
+        widths[i] = w
+        t = row["target_ids"]
+        targets.append(t)
+        target_lengths[i] = t.numel()
+        ids.append(row["sample_id"])
+        img_paths.append(row["image_path"])
+        token_refs.append(row["target_tokens"])
 
-
-def _pick_main_tensor(x):
-    if isinstance(x, dict):
-        # best effort: prefer known keys, else first value
-        for k in ["neck_out", "backbone_out", "x", "out"]:
-            if k in x:
-                return x[k]
-        return next(iter(x.values()))
-    return x
-
-
-@paddle.no_grad()
-def extract_rec_features(rec_model: paddle.nn.Layer, x: paddle.Tensor) -> Dict[str, paddle.Tensor]:
-    """
-    Extract recognition features for font classification.
-
-    Returns:
-      - pre_ctc_map: tensor after backbone+neck, typically [B,C,H,W]
-      - im2seq:      tensor after Im2Seq reshape, [B,T,C]  (BEST for font style)
-      - ctc_neck:    tensor after SequenceEncoder, [B,T,D] (more language-biased)
-    """
-    m = rec_model
-
-    # Transform
-    if getattr(m, "use_transform", False):
-        x = m.transform(x)
-
-    # Backbone
-    if getattr(m, "use_backbone", False):
-        x = m.backbone(x)
-        x = _pick_main_tensor(x)
-
-    # Neck
-    if getattr(m, "use_neck", False):
-        x = m.neck(x)
-        x = _pick_main_tensor(x)
-
-    pre_ctc_map = x
-
-    head = getattr(m, "head", None)
-    if head is None:
-        raise RuntimeError("Cannot extract features: model.head not found.")
-
-    # --- im2seq (preferred) ---
-    im2seq = None
-    if hasattr(head, "encoder_reshape"):
-        # MultiHead defines encoder_reshape = Im2Seq(in_channels) :contentReference[oaicite:2]{index=2}
-        try:
-            im2seq = head.encoder_reshape(pre_ctc_map)  # [B,T,C]
-        except Exception:
-            im2seq = None
-
-    # --- ctc neck (fallback / optional) ---
-    ctc_neck = None
-    if hasattr(head, "ctc_encoder"):
-        try:
-            ctc_neck = head.ctc_encoder(pre_ctc_map)  # should yield [B,T,D]
-        except Exception:
-            ctc_neck = None
-
-    feats: Dict[str, paddle.Tensor] = {"pre_ctc_map": pre_ctc_map}
-    if im2seq is not None:
-        feats["im2seq"] = im2seq
-    if ctc_neck is not None:
-        feats["ctc_neck"] = ctc_neck
-
-    if "im2seq" not in feats and "ctc_neck" not in feats:
-        raise RuntimeError(
-            "Failed to extract both im2seq and ctc_neck. "
-            "Check that your rec model uses MultiHead/CTCHead (encoder_reshape/ctc_encoder)."
-        )
-
-    return feats
+    return {
+        "images": images,
+        "input_widths": widths,
+        "targets": torch.cat(targets, dim=0),
+        "target_lengths": target_lengths,
+        "sample_ids": ids,
+        "image_paths": img_paths,
+        "target_tokens": token_refs,
+    }
 
 
-def load_rec_model_with_features(
-    config_path: str,
-    checkpoint_path: str,
-    device: str = "gpu",
-):
-    paddle.set_device("cpu" if device == "cpu" else "gpu")
-
-    cfg = _load_yaml(config_path)
-    _inject_out_channels_list(cfg, config_path)
-
-    from ppocr.modeling.architectures.base_model import BaseModel  # type: ignore
-
-    model = BaseModel(cfg["Architecture"])
-    _load_weights(model, cfg, checkpoint_path)
-
-    model.eval()
-    return model
+def dominant_font(tokens: Iterable[str]) -> str:
+    counts: Dict[str, int] = {}
+    for t in tokens:
+        counts[t] = counts.get(t, 0) + 1
+    return max(counts, key=counts.get)

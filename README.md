@@ -163,7 +163,7 @@ scripts/font_recognition/
 
 ### Training Setup
 
-The strongest zero-shot model (**PaddleOCR – server recognizer**) was fine-tuned on the training split and evaluated on `test.csv`.
+Two CTC-based font recognizers are trained on clean manifests:
 
 - **CRNN + CTC**
 - **Transformer encoder + CTC**
@@ -206,50 +206,12 @@ This corresponds to **Font CER = 0.0214 (~2.14%)** on the scored clean set.
 
 ---
 
-## 🅱️ Font Group Recognition (Per-Character)
+## Next Steps
 
-Font recognition is implemented as a **second-stage classifier** that operates on top of a frozen OCR recognizer.
-Rather than predicting fonts directly from raw images, Gothi-Read **reuses intermediate OCR features** that already encode visual style information.
-
-### Design Rationale
-
-* OCR encoders naturally learn **font- and style-aware representations**
-* Font prediction is treated as a **token-level classification** problem
-* Decoupling OCR and font learning improves stability and debuggability
-
-### Pipeline Overview
-
-1. Input image is passed through a **frozen PaddleOCR recognizer**
-2. Intermediate sequence features are extracted (`im2seq`, pre-language)
-3. Grapheme-level time ranges (from alignment) define pooling windows
-4. A lightweight font head predicts the font group per grapheme
-
-### Model Components
-
-* **Feature source:** `im2seq` (pre-language, style-rich)
-* **Pooling:** attention + max pooling over alignment ranges
-* **Context modeling:** depthwise Conv1D or optional BiGRU across graphemes
-* **Classifier:** shallow MLP head
-* **Loss:** weighted cross-entropy with focal term and label smoothing
-
-### Training Characteristics
-
-* OCR backbone is **fully frozen**
-* Only the font head and pooling module are trained
-* Tokens near font boundaries are down-weighted to reduce alignment noise
-* Samples containing font transitions are oversampled
-
-### Current Performance (Validation)
-
-* **Micro accuracy:** ~82–83 %
-* **Macro accuracy:** ~80–81 %
-
-Accuracy is primarily limited by:
-
-* strong class imbalance in validation data
-* noisy alignment near font boundaries
-
-Interior (non-boundary) tokens consistently achieve higher accuracy than boundary tokens.
+- Add a final submission exporter that combines OCR text + font-sequence output in Track-B format
+- Add confidence-based calibration for OCR/font mismatch handling on difficult lines
+- Benchmark joint OCR+font pipeline on held-out splits with reproducible seeds
+- Continue model ensembling and decoding ablations to push Font CER below current baseline
 
 ---
 
