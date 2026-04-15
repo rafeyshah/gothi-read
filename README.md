@@ -46,6 +46,28 @@ Detailed per-font-group OCR CER:
 | textura | 0.0154 |
 | multiple-font lines | 0.0233 |
 
+### OCR Specialists vs Omni (PaddleOCR)
+
+An additional specialist-vs-omni OCR experiment was run by training one PaddleOCR recognizer per font family and one for `multiple` lines, then evaluating each specialist against the omni model on the same family-specific validation subset.
+
+- Specialists improved OCR CER on `antiqua`, `fraktur`, `gotico-antiqua`, and `italic`.
+- The omni model remained stronger on `bastarda`, `rotunda`, `schwabacher`, `textura`, and `multiple`.
+- The largest specialist regression was on `bastarda` and mixed-font (`multiple`) lines.
+
+Detailed omni vs specialist OCR comparison:
+
+| Family | Omni CER | Specialist CER | Delta CER | Omni WER | Specialist WER | Delta WER | Winner |
+|---|---:|---:|---:|---:|---:|---:|---|
+| antiqua | 0.0082 | 0.0072 | -0.0010 | 0.0590 | 0.0500 | -0.0091 | specialist |
+| bastarda | 0.0141 | 0.0441 | 0.0300 | 0.0979 | 0.2203 | 0.1224 | omni |
+| fraktur | 0.0085 | 0.0077 | -0.0008 | 0.0566 | 0.0471 | -0.0095 | specialist |
+| gotico-antiqua | 0.0126 | 0.0124 | -0.0003 | 0.0787 | 0.0770 | -0.0016 | specialist |
+| italic | 0.0133 | 0.0131 | -0.0002 | 0.0800 | 0.0818 | 0.0017 | specialist (CER) |
+| rotunda | 0.0145 | 0.0192 | 0.0047 | 0.0858 | 0.1202 | 0.0344 | omni |
+| schwabacher | 0.0058 | 0.0066 | 0.0008 | 0.0449 | 0.0528 | 0.0080 | omni |
+| textura | 0.0154 | 0.0228 | 0.0074 | 0.1003 | 0.1398 | 0.0396 | omni |
+| multiple | 0.0233 | 0.0505 | 0.0272 | 0.1223 | 0.2568 | 0.1345 | omni |
+
 ### Per-Character Font Group Recognition (Track B)
 
 - **Ensemble Font CER:** 0.0214 (2.14%) on 17,923 scored lines

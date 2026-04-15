@@ -97,8 +97,10 @@ def load_align_items_from_csv(
     split_hint: Optional[str] = None,
     only_ok: bool = True,
     limit: Optional[int] = None,
+    dominant_font_filter: Optional[Sequence[str]] = None,
 ) -> List[AlignItem]:
     items: List[AlignItem] = []
+    allowed_dominant = set(dominant_font_filter) if dominant_font_filter else None
     p = Path(csv_path)
     with p.open("r", encoding="utf-8", newline="") as f:
         reader = csv.DictReader(f)
@@ -123,6 +125,8 @@ def load_align_items_from_csv(
             if not gt_fonts:
                 continue
             if any(tok not in font_stoi for tok in gt_fonts):
+                continue
+            if allowed_dominant is not None and dominant_font(gt_fonts) not in allowed_dominant:
                 continue
 
             items.append(

@@ -47,6 +47,11 @@ def parse_args():
     ap.add_argument("--val_limit", type=int, default=None)
     ap.add_argument("--no_weighted_sampler", action="store_true")
     ap.add_argument("--save_every_epoch", action="store_true", help="Also save epoch_XXXX.pt each epoch.")
+    ap.add_argument(
+        "--dominant_font_filter",
+        default=None,
+        help="Optional comma-separated dominant font labels to keep, e.g. G or a,b.",
+    )
     return ap.parse_args()
 
 
@@ -54,6 +59,13 @@ def set_seed(seed: int):
     random.seed(seed)
     torch.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
+
+
+def parse_font_filter_arg(raw: str | None) -> List[str] | None:
+    if raw is None:
+        return None
+    vals = [x.strip() for x in raw.split(",") if x.strip()]
+    return vals or None
 
 
 def build_loader(
@@ -102,6 +114,7 @@ def main():
 
     labels, stoi = load_font_vocab(args.font_vocab)
     id_to_label = {i + 1: lab for i, lab in enumerate(labels)}
+    dominant_filter = parse_font_filter_arg(args.dominant_font_filter)
 
     train_items = load_align_items_from_csv(
         args.train_csv,
@@ -110,6 +123,7 @@ def main():
         split_hint=args.train_split,
         only_ok=True,
         limit=args.train_limit,
+        dominant_font_filter=dominant_filter,
     )
     val_items = load_align_items_from_csv(
         args.val_csv,
@@ -118,6 +132,7 @@ def main():
         split_hint=args.val_split,
         only_ok=True,
         limit=args.val_limit,
+        dominant_font_filter=dominant_filter,
     )
     if not train_items:
         raise RuntimeError("No train samples found. Check --data_root and --train_csv.")
@@ -233,6 +248,7 @@ def main():
         "num_train_samples": len(train_items),
         "num_val_samples": len(val_items),
         "labels": labels,
+        "dominant_font_filter": dominant_filter,
     }
     (out_dir / "summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
     print(json.dumps(summary, indent=2))

@@ -38,7 +38,19 @@ def parse_args():
     ap.add_argument("--out_dir", default="runs/font-ctc-eval")
     ap.add_argument("--arch", type=str, default=None, choices=["crnn", "transformer"])
     ap.add_argument("--smooth_window", type=int, default=1, help="Odd number; 1 disables smoothing.")
+    ap.add_argument(
+        "--dominant_font_filter",
+        default=None,
+        help="Optional comma-separated dominant font labels to evaluate, e.g. G or a,b.",
+    )
     return ap.parse_args()
+
+
+def parse_font_filter_arg(raw: str | None) -> List[str] | None:
+    if raw is None:
+        return None
+    vals = [x.strip() for x in raw.split(",") if x.strip()]
+    return vals or None
 
 
 @torch.no_grad()
@@ -50,6 +62,7 @@ def main():
     labels, stoi = load_font_vocab(args.font_vocab)
     id_to_label = {i + 1: lab for i, lab in enumerate(labels)}
     ckpt = torch.load(args.checkpoint, map_location="cpu")
+    dominant_filter = parse_font_filter_arg(args.dominant_font_filter)
 
     arch = args.arch or ckpt.get("arch", "crnn")
     model = build_font_ctc_model(arch, num_labels=len(labels))
@@ -65,6 +78,7 @@ def main():
         split_hint=args.split,
         only_ok=True,
         limit=args.limit,
+        dominant_font_filter=dominant_filter,
     )
     ds = FontAlignDataset(items, stoi, image_height=args.image_height, max_width=args.max_width)
     dl = DataLoader(ds, batch_size=args.batch_size, shuffle=False, num_workers=args.num_workers, collate_fn=collate_font_batch)
@@ -122,6 +136,7 @@ def main():
         "manifest_csv": str(Path(args.manifest_csv)),
         "arch": arch,
         "smooth_window": int(args.smooth_window),
+        "dominant_font_filter": dominant_filter,
         "per_dominant_font": per_dom_out,
     }
     (out_dir / "metrics.json").write_text(json.dumps(metrics, indent=2), encoding="utf-8")
