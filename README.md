@@ -94,6 +94,28 @@ Observations:
 - Harder dominant groups for CRNN are `b` and `r`.
 - Strongest dominant group for CRNN is `t`.
 
+### Font Specialists vs Omni (CRNN)
+
+An additional specialist-vs-omni font-recognition experiment was run by training one CRNN font recognizer per dominant font group and comparing each specialist against the omni CRNN model on the same dominant-font validation subset.
+
+- The omni model won on `G`, `f`, `i`, `r`, `s`, and `t`.
+- Specialists improved only on `a` and `b`.
+- The largest specialist gain was on `b`.
+- The largest specialist regression was on `t`.
+
+Detailed omni vs specialist font comparison:
+
+| Dominant Font | Omni Font CER | Specialist Font CER | Delta CER | Winner |
+|---|---:|---:|---:|---|
+| G | 0.00434 | 0.00770 | 0.00336 | omni |
+| a | 0.01160 | 0.01056 | -0.00104 | specialist |
+| b | 0.63307 | 0.06504 | -0.56803 | specialist |
+| f | 0.01078 | 0.01309 | 0.00231 | omni |
+| i | 0.04507 | 0.04877 | 0.00370 | omni |
+| r | 0.01225 | 0.01798 | 0.00574 | omni |
+| s | 0.01477 | 0.03955 | 0.02478 | omni |
+| t | 0.00800 | 0.22603 | 0.21802 | omni |
+
 ### Submission Export Status
 
 - End-to-end Track B export pipeline is implemented:
